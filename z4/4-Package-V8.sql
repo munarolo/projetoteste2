@@ -1,0 +1,1191 @@
+SELECT * from SYS.USER_ERRORS where NAME = 'PKG_DASHBOARD_FISCAL' ;
+
+CREATE OR REPLACE PACKAGE BODY PKG_DASHBOARD_FISCAL AS
+
+    PROCEDURE SP_SEL_FILTROS_HOLDING( 
+      P_FILTROS OUT SYS_REFCURSOR )
+    IS
+      V_FILTROS SYS_REFCURSOR;
+    BEGIN
+      OPEN V_FILTROS FOR
+           SELECT DISTINCT H.COD_HOLDING, HC.DES_HOLDING || ' (' || H.DES_HOLDING || ')' AS DES_HOLDING
+                  FROM HOLDING_GEF H
+                  INNER JOIN SCH_C31DB00.T_EMPRESA_GEF E ON H.COD_HOLDING = E.SIGLA_HOLDING
+                  INNER JOIN SCH_C31DB00.T_SIGLA_HOLDING HC ON H.COD_HOLDING = HC.SIGLA_HOLDING
+                  WHERE E.TAG_CBEMP = 'S'
+                  ORDER BY HC.DES_HOLDING || ' (' || H.DES_HOLDING || ')';
+
+      P_FILTROS := V_FILTROS;
+    END;
+
+    PROCEDURE SP_SEL_LAYOUT( 
+      P_USER_ID CHAR, 
+      P_FILTROS OUT SYS_REFCURSOR )
+    IS
+      V_FILTROS SYS_REFCURSOR;
+      V_QTD NUMBER(1);
+    BEGIN
+      --SE NÃO EXISTIR LAYOUT PARA O USUÁRIO, CRIA LAYOUT PADRAO
+      SELECT COUNT(1) INTO V_QTD FROM T_TOT_DASHBOARD_FISCAL_LAYOUT WHERE USER_ID = P_USER_ID;
+      IF NVL(V_QTD,0) = 0  THEN
+        INSERT INTO T_TOT_DASHBOARD_FISCAL_LAYOUT (USER_ID, VLR_SUPERIOR_INI, VLR_SUPERIOR_FIM, ID_SUPERIOR_COR, VLR_META, ID_META_COR, VLR_INFERIOR_INI, VLR_INFERIOR_FIM, ID_INFERIOR_COR)
+            SELECT P_USER_ID, VLR_SUPERIOR_INI, VLR_SUPERIOR_FIM, ID_SUPERIOR_COR, VLR_META, ID_META_COR, VLR_INFERIOR_INI, VLR_INFERIOR_FIM, ID_INFERIOR_COR
+                FROM T_TOT_DASHBOARD_FISCAL_LAYOUT 
+                WHERE USER_ID = 'PADRAO';
+      END IF;
+
+      OPEN V_FILTROS FOR
+          SELECT VLR_SUPERIOR_INI, VLR_SUPERIOR_FIM, ID_SUPERIOR_COR, VLR_META, ID_META_COR, VLR_INFERIOR_INI, VLR_INFERIOR_FIM, ID_INFERIOR_COR 
+              FROM T_TOT_DASHBOARD_FISCAL_LAYOUT
+              WHERE USER_ID = P_USER_ID;
+      P_FILTROS := V_FILTROS;
+    END;
+
+    PROCEDURE SP_UPD_LAYOUT(
+      P_USER_ID          CHAR,
+      P_VLR_SUPERIOR_INI NUMBER,
+      P_VLR_SUPERIOR_FIM NUMBER,
+      P_ID_SUPERIOR_COR  CHAR,
+      P_VLR_META         NUMBER,
+      P_ID_META_COR      CHAR,
+      P_VLR_INFERIOR_INI NUMBER,
+      P_VLR_INFERIOR_FIM NUMBER,
+      P_ID_INFERIOR_COR  CHAR)
+    IS
+    BEGIN
+      UPDATE T_TOT_DASHBOARD_FISCAL_LAYOUT SET 
+          VLR_SUPERIOR_INI = P_VLR_SUPERIOR_INI, 
+          VLR_SUPERIOR_FIM = P_VLR_SUPERIOR_FIM, 
+          ID_SUPERIOR_COR  = P_ID_SUPERIOR_COR, 
+          VLR_META         = P_VLR_META, 
+          ID_META_COR      = P_ID_META_COR, 
+          VLR_INFERIOR_INI = P_VLR_INFERIOR_INI, 
+          VLR_INFERIOR_FIM = P_VLR_INFERIOR_FIM, 
+          ID_INFERIOR_COR  = P_ID_INFERIOR_COR,
+          
+        WHERE USER_ID = P_USER_ID;
+      COMMIT;
+    END;
+
+    PROCEDURE SP_SEL_FILTROS_UF( P_FILTROS OUT SYS_REFCURSOR )
+    IS
+      V_FILTROS SYS_REFCURSOR;
+    BEGIN
+
+      OPEN V_FILTROS FOR
+          SELECT DISTINCT COD_UF, NOM_UF, COD_UF || ' - ' || NOM_UF AS DES_UF
+              FROM SCH_C31DB00.T_UF
+              ORDER BY NOM_UF;
+
+      P_FILTROS := V_FILTROS;
+    END;
+
+    PROCEDURE SP_SEL_FILTROS_GRUPO_SITUACAO( P_FILTROS OUT SYS_REFCURSOR )
+    IS
+      V_FILTROS SYS_REFCURSOR;
+    BEGIN
+
+      OPEN V_FILTROS FOR
+          SELECT *
+              FROM SCH_DW_OI.T_GRUPO_SITUACAO
+              ORDER BY DES_GRUPO_SITUACAO;
+
+      P_FILTROS := V_FILTROS;
+    END;
+
+    PROCEDURE SP_SEL_ACIONAMENTOS_UF( 
+      P_MESREFINI CHAR,
+      P_MESREFFIM CHAR,
+      P_OPERADORA CHAR,
+      P_UF        CHAR,
+      P_CSP       CHAR,
+      P_CICLOINI  CHAR,
+      P_CICLOFIM  CHAR,
+      P_SITUACAO  CHAR,
+      P_STATUS    CHAR,
+      P_FILTROS   OUT SYS_REFCURSOR )
+    IS
+      V_FILTROS   SYS_REFCURSOR;
+      P_TMP       VARCHAR2(100);
+    BEGIN
+
+      PKG_DASHBOARD_FISCAL.SP_SEL_GERATAB(P_MESREFINI, P_MESREFFIM, P_OPERADORA, P_UF, P_CSP, P_CICLOINI, P_CICLOFIM, P_SITUACAO, P_STATUS, P_TMP);
+
+      OPEN V_FILTROS FOR 
+          'SELECT UF, sum(QTD_ENVIO) QTD
+              FROM ' || P_TMP ||'
+              GROUP BY UF HAVING SUM(nvl(QTD_ENVIO,0)) > 0 
+              ORDER BY UF';
+
+      P_FILTROS := V_FILTROS;
+    END;
+
+   PROCEDURE SP_SEL_GERATAB(
+      P_MESREFINI CHAR,
+      P_MESREFFIM CHAR,
+      P_OPERADORA CHAR,
+      P_UF        CHAR,
+      P_CSP       CHAR,
+      P_CICLOINI  CHAR,
+      P_CICLOFIM  CHAR,
+      P_SITUACAO  CHAR,
+      P_STATUS    CHAR,
+      P_TMP OUT   VARCHAR2)
+    IS
+      --VARIAVEIS DE TRABALHO
+      V_QUERY     CLOB;
+      V_QUERYTOT  CLOB;
+      --VARIAVEIS DOS CURSORES
+      C_PIVOT     SYS_REFCURSOR;
+      V_CNT       NUMBER;
+      V_FILTRO_SITUACAO VARCHAR2(100);
+      V_FILTRO_STATUS VARCHAR2(100);
+      V_FILTRO_CICLO VARCHAR2(100);
+    BEGIN    
+
+    V_FILTRO_CICLO := '';
+    IF LENGTH(rtrim(ltrim(nvl(P_CICLOINI,'')))) > 0 THEN
+      v_filtro_ciclo := ' AND CICLO BETWEEN  ' || P_CICLOINI || ' AND ' || P_CICLOFIM;
+    END IF;
+
+    V_FILTRO_STATUS := '';
+    IF TRIM(P_STATUS) <> 'Todos' THEN
+      IF P_STATUS = 'OK' THEN
+        v_filtro_status :=  ' AND (NVL(VLR_RESUMO,0) <> NVL(VLR_TOTAL,0)) ';
+      ELSE
+        v_filtro_status :=  ' AND (NVL(VLR_RESUMO,0) = NVL(VLR_TOTAL,0)) ';
+      END IF;
+    END IF;
+
+    V_FILTRO_SITUACAO := '';
+    IF trim(P_SITUACAO) <> '0' THEN
+      V_FILTRO_SITUACAO := ' AND UPPER(COD_SIT) = ''' || P_SITUACAO || '''';
+    END IF;
+
+    SELECT sps_NomeTabTemp('DASHFI') INTO P_TMP FROM DUAL;
+    SELECT COUNT(1) INTO V_CNT FROM user_tables WHERE table_name = P_TMP;
+    IF V_CNT <> 0 THEN
+      EXECUTE IMMEDIATE 'TRUNCATE TABLE ' || P_TMP;
+      EXECUTE IMMEDIATE 'DROP TABLE ' || P_TMP;
+    END IF;
+
+    --BATENDO RESUMO COM FISCAL COM A CHAVE COMPLETA
+    V_QUERY := 'SELECT ''%CSP%'' AS CSP, GFX.*, AF.CICLO_NF, AF.COD_SIT, AF.DSN_ORIGINAL, AF.VLR_TOTAL, AF.SIGLA_CB, AF.ANO_MES_EMISSAONF, AF.UF_COB, DECODE(COD_SIT, 0,''RESUMO'',1,''ACEITO C/ PROT'',2,''ACEITO S/ PROT'',3,''REJEITADO'',4,''RECEBIDO'',5,''PENDENTE'',9,''ACIONAMENTOS'') DES_SIT, QTD_ENVIO
+      FROM (
+        SELECT ROW_NUMBER() OVER ( ORDER BY SOL.COD_HOLDING  ) LINHA_GFX, SOL.COD_HOLDING, HC.DES_HOLDING, SOL.MES_REFERENCIA, DET.UF, DET.CICLO, SUM(VALOR_CONTABIL) VLR_RESUMO
+          FROM SOLICITACAO_CARGA_PRE_GFX%%% SOL 
+          INNER JOIN T_SIGLA_HOLDING%%% HC ON HC.SIGLA_HOLDING = SOL.COD_HOLDING
+          INNER JOIN RESUMO_FISCAL_GFX%%% DET ON SOL.ID_CARGA = DET.ID_CARGA AND SOL.TIPO_DEMONSTRATIVO = ''RESU''
+          WHERE SOL.MES_REFERENCIA BETWEEN '''||P_MESREFINI||''' AND '''||P_MESREFFIM||'''
+          GROUP BY SOL.COD_HOLDING, HC.DES_HOLDING, SOL.MES_REFERENCIA, DET.UF, DET.CICLO
+      ) GFX
+    INNER JOIN 
+      (
+         SELECT DISTINCT SIGLA_CB, ANO_MES_EMISSAONF, UF_COB, CICLO_NF, COD_SIT, T.DSN_ORIGINAL, sum(T.VLR_TOTAL) VLR_TOTAL, SUM(T.QTD_ENVIO) QTD_ENVIO
+           FROM SCH_C00DB00.T_VALIDADOR_FISCAL T
+           WHERE ANO_MES_EMISSAONF BETWEEN '''||P_MESREFINI||''' AND '''||P_MESREFFIM||'''
+           GROUP BY SIGLA_CB, ANO_MES_EMISSAONF, UF_COB, CICLO_NF, COD_SIT, T.DSN_ORIGINAL
+      ) AF
+      ON AF.SIGLA_CB = GFX.COD_HOLDING
+         AND ANO_MES_EMISSAONF = GFX.MES_REFERENCIA
+         AND AF.UF_COB = GFX.UF
+         AND AF.CICLO_NF = GFX.CICLO';
+    
+      IF P_CSP = '31' THEN V_QUERYTOT := REPLACE(REPLACE(REPLACE(V_QUERY,'%%%',''),'%%','31'),'%CSP%', '31'); V_QUERYTOT := REPLACE(V_QUERYTOT,'SCH_C00DB00', 'SCH_C31DB31'); END IF;
+      IF P_CSP = '14' THEN V_QUERYTOT := REPLACE(REPLACE(REPLACE(V_QUERY,'%%%','_BRT'),'%%','14'),'%CSP%', '14'); V_QUERYTOT := REPLACE(V_QUERYTOT,'SCH_C00DB00', 'SCH_C14DB14'); END IF;
+      IF P_CSP = '0' THEN V_QUERYTOT := REPLACE(REPLACE(REPLACE(REPLACE(V_QUERY,'%%%','_BRT'),'%%','14'), 'SCH_C00DB00', 'SCH_C14DB14'),'%CSP%', '14') || ' UNION ALL ' || REPLACE(REPLACE(REPLACE(REPLACE(V_QUERY,'%%%',''),'%%','31'), 'SCH_C00DB00', 'SCH_C31DB31'),'%CSP%', '31'); END IF;
+
+      --V_QUERYTOT := 'CREATE GLOBAL TEMPORARY TABLE '|| P_TMP ||' ON COMMIT PRESERVE ROWS AS ' || V_QUERYTOT;
+      V_QUERYTOT := 'CREATE GLOBAL TEMPORARY TABLE '|| P_TMP ||' ON COMMIT PRESERVE ROWS AS SELECT * FROM ( ' || V_QUERYTOT || ') TABELA WHERE 0=0 ';
+      V_QUERYTOT := V_QUERYTOT || P_OPERADORA;
+      V_QUERYTOT := V_QUERYTOT || ' ' || P_UF;
+      V_QUERYTOT := V_QUERYTOT || ' ' || V_FILTRO_CICLO;
+      V_QUERYTOT := V_QUERYTOT || ' ' || V_FILTRO_STATUS;
+      V_QUERYTOT := V_QUERYTOT || ' ' || V_FILTRO_SITUACAO;
+      DBMS_OUTPUT.PUT_LINE(V_QUERYTOT);
+      EXECUTE IMMEDIATE V_QUERYTOT;
+    
+      --BATENDO RESUMO COM FISCAL COM A CHAVE SEM O CICLO PARA 
+      --   OS RESUMOS E FISCAIS QUE NAO BATERAM NA PRIMEIRA ETAPA
+      V_QUERY := 'SELECT ''%CSP%'' AS CSP, GFX.*, AF.CICLO_NF, AF.COD_SIT, AF.DSN_ORIGINAL, AF.VLR_TOTAL, AF.SIGLA_CB, AF.ANO_MES_EMISSAONF, AF.UF_COB, DECODE(COD_SIT, 0,''RESUMO'',1,''ACEITO C/ PROT'',2,''ACEITO S/ PROT'',3,''REJEITADO'',4,''RECEBIDO'',5,''PENDENTE'',9,''ACIONAMENTOS'') DES_SIT, QTD_ENVIO
+      FROM (
+        SELECT -1 * ROW_NUMBER() OVER ( ORDER BY SOL.COD_HOLDING  ) LINHA_GFX, SOL.COD_HOLDING, HC.DES_HOLDING, SOL.MES_REFERENCIA, DET.UF, DET.CICLO, SUM(VALOR_CONTABIL) VLR_RESUMO
+          FROM SOLICITACAO_CARGA_PRE_GFX%%% SOL
+          INNER JOIN T_SIGLA_HOLDING%%% HC ON HC.SIGLA_HOLDING = SOL.COD_HOLDING
+          INNER JOIN RESUMO_FISCAL_GFX%%% DET ON SOL.ID_CARGA = DET.ID_CARGA AND SOL.TIPO_DEMONSTRATIVO = ''RESU''
+          WHERE SOL.MES_REFERENCIA BETWEEN '''||P_MESREFINI||''' AND '''||P_MESREFFIM||'''
+/*                AND NOT EXISTS (
+                                  SELECT 1
+                                    FROM '|| P_TMP ||' TMP 
+                                    WHERE TMP.COD_HOLDING = SOL.COD_HOLDING
+                                          AND TMP.MES_REFERENCIA = SOL.MES_REFERENCIA
+                                          AND TMP.UF = DET.UF
+                                          AND TMP.CICLO = DET.CICLO
+                                          AND CSP = ''%CSP%''
+                               )
+*/
+          GROUP BY SOL.COD_HOLDING, HC.DES_HOLDING, SOL.MES_REFERENCIA, DET.UF, DET.CICLO
+          ) GFX
+      LEFT JOIN (
+        SELECT DISTINCT SIGLA_CB, ANO_MES_EMISSAONF, UF_COB, CICLO_NF, COD_SIT, T.DSN_ORIGINAL, sum(T.VLR_TOTAL) VLR_TOTAL, SUM(T.QTD_ENVIO) QTD_ENVIO 
+          FROM SCH_C00DB00.T_VALIDADOR_FISCAL T
+           WHERE ANO_MES_EMISSAONF BETWEEN '''||P_MESREFINI||''' AND '''||P_MESREFFIM||'''
+                 AND NOT EXISTS (
+                                   SELECT 1
+                                     FROM '|| P_TMP ||' TMP
+                                     WHERE TMP.SIGLA_CB = T.SIGLA_CB
+                                           AND TMP.ANO_MES_EMISSAONF = T.ANO_MES_EMISSAONF
+                                           AND TMP.UF_COB = T.UF_COB
+                                           AND TMP.CICLO_NF = T.CICLO_NF
+                                           AND CSP = ''%CSP%''
+                                 )
+          GROUP BY SIGLA_CB, ANO_MES_EMISSAONF,UF_COB, CICLO_NF, COD_SIT, T.DSN_ORIGINAL  -- AND T.CICLO_NF = 1
+      ) AF
+      ON AF.SIGLA_CB = GFX.COD_HOLDING
+         AND ANO_MES_EMISSAONF = GFX.MES_REFERENCIA
+         AND AF.UF_COB = GFX.UF';
+
+      IF P_CSP = '31' THEN V_QUERYTOT := REPLACE(REPLACE(REPLACE(V_QUERY,'%%%',''),'%%','31'),'%CSP%', '31'); V_QUERYTOT := REPLACE(V_QUERYTOT,'SCH_C00DB00', 'SCH_C31DB31'); END IF;
+      IF P_CSP = '14' THEN V_QUERYTOT := REPLACE(REPLACE(REPLACE(V_QUERY,'%%%','_BRT'),'%%','14'),'%CSP%', '14'); V_QUERYTOT := REPLACE(V_QUERYTOT,'SCH_C00DB00', 'SCH_C14DB14'); END IF;
+      IF P_CSP = '0' THEN V_QUERYTOT := REPLACE(REPLACE(REPLACE(REPLACE(V_QUERY,'%%%','_BRT'),'%%','14'), 'SCH_C00DB00', 'SCH_C14DB14'),'%CSP%', '14') || ' UNION ALL ' || REPLACE(REPLACE(REPLACE(REPLACE(V_QUERY,'%%%',''),'%%','31'), 'SCH_C00DB00', 'SCH_C31DB31'),'%CSP%', '31'); END IF;
+
+      --V_QUERYTOT := 'INSERT INTO ' || P_TMP || ' ' || V_QUERYTOT ;
+      V_QUERYTOT := 'INSERT INTO ' || P_TMP || ' SELECT * FROM ( ' || V_QUERYTOT || ') TABELA WHERE 0=0 ';
+      V_QUERYTOT := V_QUERYTOT || ' ' || P_OPERADORA;
+      V_QUERYTOT := V_QUERYTOT || ' ' || P_UF;
+      V_QUERYTOT := V_QUERYTOT || ' ' || V_FILTRO_CICLO;
+      V_QUERYTOT := V_QUERYTOT || ' ' || V_FILTRO_STATUS;
+      V_QUERYTOT := V_QUERYTOT || ' ' || V_FILTRO_SITUACAO;
+      DBMS_OUTPUT.PUT_LINE(V_QUERYTOT);
+      EXECUTE IMMEDIATE V_QUERYTOT;
+    END;
+
+    PROCEDURE SP_SEL_BATIMENTO(
+      P_MESREFINI CHAR,
+      P_MESREFFIM CHAR,
+      P_OPERADORA CHAR,
+      P_UF        CHAR,
+      P_CSP       CHAR,
+      P_CICLOINI  CHAR,
+      P_CICLOFIM  CHAR,
+      P_SITUACAO  CHAR,
+      P_STATUS    CHAR,
+      P_FILTROS   OUT SYS_REFCURSOR )
+    IS
+      --VARIAVEIS DE TRABALHO
+      COLS        CLOB; --PEGA AS COLUNAS QUE SERAO GERADAS NO PIVOT (MES_REFERENCIA)
+      v_query     clob;
+      V_QUERYTOT  CLOB;
+      --VARIAVEIS DOS CURSORES
+      C_PIVOT     SYS_REFCURSOR;
+      P_TMP       VARCHAR2(100);
+    BEGIN
+
+      PKG_DASHBOARD_FISCAL.SP_SEL_GERATAB(P_MESREFINI, P_MESREFFIM, P_OPERADORA, P_UF, P_CSP, P_CICLOINI, P_CICLOFIM, P_SITUACAO, P_STATUS, P_TMP);
+
+      --COLUNAS DA PIVOT TABLE (ANOMES)
+      SELECT LISTAGG('''' || MES_REFERENCIA || ''' as "' || MES_REFERENCIA || '"', ',') WITHIN GROUP (ORDER BY MES_REFERENCIA) INTO COLS
+        FROM (SELECT DISTINCT MES_REFERENCIA FROM SOLICITACAO_CARGA_PRE_GFX 
+                WHERE mes_referencia BETWEEN P_MESREFINI 
+                      AND P_MESREFFIM ORDER BY 1);
+
+      --RESUMIDO E/OU GRID GRAFICO
+      v_query := '
+SELECT * FROM (
+SELECT 
+  ''%CSP%'' AS CSP,
+  MES_REFERENCIA
+  , COD_SIT
+  , DECODE(COD_SIT, 0,''RESUMO'',1,''ACEITO C/ PROT'',2,''ACEITO S/ PROT'',3,''REJEITADO'',4,''RECEBIDO'',5,''PENDENTE'',9,''ACIONAMENTOS'') DES_SIT
+  , ROUND((VLR/CASE WHEN COD_SIT <> 9 THEN 1000 ELSE 1 END),2) VLR
+FROM
+(
+  --PEGANDO VALORES DOS RESUMOS
+  SELECT 
+  MES_REFERENCIA
+  , 0 COD_SIT
+  , SUM(VLR_RESUMO) VLR
+  FROM 
+  (
+    --PEGA VALORES DO GEF (RESUMO)
+    SELECT DISTINCT 
+--    T.LINHA_GFX,
+    MES_REFERENCIA,
+    VLR_RESUMO
+    FROM '|| P_TMP ||'  T
+    WHERE CSP=''%CSP%''
+  )
+  GROUP BY MES_REFERENCIA
+UNION ALL
+  --PEGANDO VALORES DOS FISCAIS COM STATUS 
+  SELECT 
+  MES_REFERENCIA
+  , COD_SIT
+  , SUM(T.VLR_TOTAL) VLR
+  FROM '|| P_TMP ||' T
+  WHERE COD_SIT IS NOT NULL
+        AND CSP=''%CSP%''
+  GROUP BY 
+  MES_REFERENCIA
+  , COD_SIT
+UNION ALL
+  --SOMANDO VALORES DOS FISCAIS COM STATUS => RECEBIDO
+  SELECT 
+  MES_REFERENCIA
+  , 4 COD_SIT
+  , SUM(T.VLR_TOTAL) VLR
+  FROM '|| P_TMP ||'  T
+  WHERE COD_SIT IS NOT NULL
+        AND CSP=''%CSP%''
+  GROUP BY 
+  MES_REFERENCIA
+UNION ALL
+  --ACIONAMENTOS
+  SELECT MES_REFERENCIA 
+  , 9 AS COD_SIT
+  ,SUM(T.QTD_ENVIO) VLR
+  FROM '|| P_TMP ||' T
+  WHERE CSP=''%CSP%''
+  GROUP BY
+  MES_REFERENCIA
+UNION ALL
+  --SOMANDO VALORES DOS FISCAIS COM STATUS => RESUMO - RECEBIDO = PENDENTE
+SELECT 
+  RES.MES_REFERENCIA
+  , 5 COD_SIT
+  ,NVL(RES.VLR,0) - NVL(REC.VLR,0) VLR
+FROM 
+(  
+  SELECT 
+  MES_REFERENCIA
+  , 0 COD_SIT
+  , SUM(VLR_RESUMO) VLR
+  FROM 
+  (
+    SELECT DISTINCT 
+--    T.LINHA_GFX,
+    MES_REFERENCIA,
+    VLR_RESUMO
+    FROM '|| P_TMP ||'  T
+    WHERE CSP=''%CSP%''
+  )
+  GROUP BY --COD_HOLDING, DES_HOLDING, 
+  MES_REFERENCIA
+) RES
+JOIN 
+(
+  SELECT 
+  MES_REFERENCIA
+  , 4 COD_SIT
+  , SUM(T.VLR_TOTAL) VLR
+  FROM '|| P_TMP ||' T
+  WHERE COD_SIT IS NOT NULL
+        AND CSP=''%CSP%''
+  GROUP BY 
+  MES_REFERENCIA
+) REC ON 
+  RES.MES_REFERENCIA = REC.MES_REFERENCIA
+)
+ORDER BY 1,2
+) pivo
+PIVOT
+       (  SUM(NVL(VLR,0))
+          FOR (MES_REFERENCIA) IN ( '|| COLS ||' )
+       )';
+
+      IF P_CSP = '31' THEN V_QUERYTOT := REPLACE(REPLACE(REPLACE(V_QUERY,'%%%',''),'%%','31'),'%CSP%', '31'); V_QUERYTOT := REPLACE(V_QUERYTOT,'SCH_C00DB00', 'SCH_C31DB31'); END IF;
+      IF P_CSP = '14' THEN V_QUERYTOT := REPLACE(REPLACE(REPLACE(V_QUERY,'%%%','_BRT'),'%%','14'),'%CSP%', '14'); V_QUERYTOT := REPLACE(V_QUERYTOT,'SCH_C00DB00', 'SCH_C14DB14'); END IF;
+      IF P_CSP = '0' THEN V_QUERYTOT := REPLACE(REPLACE(REPLACE(REPLACE(V_QUERY,'%%%','_BRT'),'%%','14'), 'SCH_C00DB00', 'SCH_C14DB14'),'%CSP%', '14') || ' UNION ALL ' || REPLACE(REPLACE(REPLACE(REPLACE(V_QUERY,'%%%',''),'%%','31'), 'SCH_C00DB00', 'SCH_C31DB31'),'%CSP%', '31'); END IF;
+
+      V_QUERYTOT := V_QUERYTOT || ' ORDER BY 1,2';
+      DBMS_OUTPUT.PUT_LINE(V_QUERYTOT);
+      OPEN C_PIVOT FOR V_QUERYTOT;
+
+      P_FILTROS := C_PIVOT;
+      
+/*      SELECT COUNT(1) INTO cnt FROM user_tables WHERE table_name = 'TMP_DET_DASH';
+      IF cnt <> 0 THEN
+        EXECUTE IMMEDIATE 'TRUNCATE TABLE TMP_DET_DASH';
+        EXECUTE IMMEDIATE 'DROP TABLE TMP_DET_DASH';
+      END IF;
+*/
+    END;
+
+   PROCEDURE SP_SEL_GRAFICOBAIDU(
+      P_MESREFINI CHAR,
+      P_MESREFFIM CHAR,
+      P_OPERADORA CHAR,
+      P_UF        CHAR,
+      P_CSP       CHAR,
+      P_CICLOINI  CHAR,
+      P_CICLOFIM  CHAR,
+      P_SITUACAO  CHAR,
+      P_STATUS    CHAR,
+      P_GRAFICO_STR OUT CLOB )
+    IS
+      --VARIAVEIS DE TRABALHO
+      V_SQL                  clob;           -- VARIAVEL COMANDOS SQL EXECUTE IMMEDIATE
+      V_LINHA                CLOB;           -- LINHA DO GRAFICO DA SITUACAO ATUAL
+      V_CMD_JS_VAR           CLOB;           -- COMANDO JS DE DECLARACAO DE VARIAVEIS
+      V_CMD_JS_PUSH          CLOB;           -- COMANDO JS DE ATRIBUICAO DE VALORES
+      V_CMD_JS_XAXIS         CLOB;           -- COMANDO JS DE ATRIBUICAO DE VALORES
+      V_CMD_JS_LEGENDA       CLOB;           -- COMANDO JS DE ATRIBUICAO DE VALORES
+      V_CMD_JS_OPTION        CLOB;
+      V_CMD_JS_SERIES        CLOB;
+      V_SITUACAO             VARCHAR(100);   -- CONTROLE DE QUEBRA
+      C_DADOS                SYS_REFCURSOR;  -- CURSOR DE RETORNO COM DADOS DO GRAFICO
+      V_DADOS_SITUACAO       VARCHAR2(50);   -- VARIAVEL DO FETCH DO CURSOR C_DADOS
+      V_DADOS_MES_REFERENCIA VARCHAR2(6);    -- VARIAVEL DO FETCH DO CURSOR C_DADOS
+      V_DADOS_VALOR          VARCHAR2(6);    -- VARIAVEL DO FETCH DO CURSOR C_DADOS
+      V_PRIMEIRA_LINHA       CHAR(1);
+      V_CNT                  INTEGER;
+      P_TMP                  VARCHAR2(100);
+    BEGIN
+
+      V_SITUACAO       := 'INICIO';
+      V_CMD_JS_VAR     := ' ';
+      V_CMD_JS_PUSH    := ' ';
+      V_CMD_JS_XAXIS   := ' ';
+      V_CMD_JS_LEGENDA := ' ';
+      V_CMD_JS_SERIES  := ' ';
+      V_PRIMEIRA_LINHA := 'S';
+
+      PKG_DASHBOARD_FISCAL.SP_SEL_GERATAB(P_MESREFINI, P_MESREFFIM, P_OPERADORA, P_UF, P_CSP, P_CICLOINI, P_CICLOFIM, P_SITUACAO, P_STATUS, P_TMP);
+
+      OPEN C_DADOS FOR 
+      'SELECT DECODE(T.COD_SIT, 0,''RESUMO'',1,''ACEITO C/ PROT'',2,''ACEITO S/ PROT'',3,''REJEITADO'',4,''RECEBIDO'',5,''PENDENTE'',9,''ACIONAMENTOS'') DES_SIT, T.MES_REFERENCIA, ROUND(((SUM(T.VLR_TOTAL) / AVG(RES.VLR))*100),2) AS PCT
+        FROM '|| P_TMP ||'  T
+        INNER JOIN ( SELECT MES_REFERENCIA, SUM(VLR_RESUMO) VLR
+                         FROM ( SELECT DISTINCT /*T.LINHA_GFX,*/ MES_REFERENCIA, VLR_RESUMO FROM '|| P_TMP ||' T) GROUP BY MES_REFERENCIA) RES ON RES.MES_REFERENCIA = T.MES_REFERENCIA
+        WHERE T.COD_SIT IS NOT NULL
+        GROUP BY T.MES_REFERENCIA, T.COD_SIT
+      UNION 
+      SELECT DECODE(PENDENTE.COD_SIT, 0,''RESUMO'',1,''ACEITO C/ PROT'',2,''ACEITO S/ PROT'',3,''REJEITADO'',4,''RECEBIDO'',5,''PENDENTE'',9,''ACIONAMENTOS'') DES_SIT, PENDENTE.MES_REFERENCIA, ROUND(((SUM(PENDENTE.VLR_PENDENTE) / AVG(RESUMO.VLR))*100),2) AS PCT
+             FROM (SELECT 5 COD_SIT, RES.MES_REFERENCIA, NVL(RES.VLR,0) - NVL(REC.VLR,0) VLR_PENDENTE
+                           FROM ( SELECT MES_REFERENCIA, 0 COD_SIT, SUM(VLR_RESUMO) VLR
+                                         FROM ( SELECT DISTINCT /*T.LINHA_GFX,*/ MES_REFERENCIA, VLR_RESUMO FROM '|| P_TMP ||' T) GROUP BY MES_REFERENCIA) RES
+                    JOIN ( SELECT MES_REFERENCIA, 4 COD_SIT, SUM(T.VLR_TOTAL) VLR FROM '|| P_TMP ||' T WHERE COD_SIT IS NOT NULL GROUP BY MES_REFERENCIA) REC ON RES.MES_REFERENCIA = REC.MES_REFERENCIA
+                   ) PENDENTE --ON PENDENTE.MES_REFERENCIA = T.MES_REFERENCIA
+             INNER JOIN ( SELECT MES_REFERENCIA, SUM(VLR_RESUMO) VLR
+                         FROM ( SELECT DISTINCT /*T.LINHA_GFX,*/ MES_REFERENCIA, VLR_RESUMO FROM '|| P_TMP ||' T) GROUP BY MES_REFERENCIA) RESUMO ON RESUMO.MES_REFERENCIA = PENDENTE.MES_REFERENCIA
+      GROUP BY PENDENTE.MES_REFERENCIA, PENDENTE.COD_SIT
+      ORDER BY 1,2'
+      ;
+
+      LOOP
+        FETCH C_DADOS INTO V_DADOS_SITUACAO, V_DADOS_MES_REFERENCIA, V_DADOS_VALOR;
+        EXIT WHEN C_DADOS%NOTFOUND;
+
+        --SE MUDAR SITUACAO, FAZ QUEBRA DELETE LINHA
+        IF V_SITUACAO <> V_DADOS_SITUACAO THEN
+          V_SITUACAO    := V_DADOS_SITUACAO;
+          --DATA
+          V_CMD_JS_VAR  := V_CMD_JS_VAR || 'var V_DATA_' || replace(replace(trim(V_SITUACAO),' ',''),'/','') || ' = []; ';
+          IF V_CMD_JS_PUSH <> ' ' THEN 
+            V_CMD_JS_PUSH := V_CMD_JS_PUSH || ');'; 
+          END IF;
+          V_CMD_JS_PUSH := V_CMD_JS_PUSH || ' V_DATA_' || replace(replace(trim(V_SITUACAO),' ',''),'/','') || '.push( ';
+          
+          --LEGENDA
+          IF V_CMD_JS_LEGENDA = ' ' THEN
+            V_CMD_JS_LEGENDA := 'var legOption = [''' || V_SITUACAO || '''';
+          ELSE
+            V_CMD_JS_LEGENDA := V_CMD_JS_LEGENDA || ', ''' || V_SITUACAO || ''''; 
+          END IF;
+
+          --SERIES
+          IF V_CMD_JS_SERIES = ' ' THEN 
+            V_CMD_JS_SERIES := '{ name: ''' ||V_SITUACAO||''', type: ''bar'', stack: ''one'', emphasis: emphasisStyle, data: V_DATA_' || replace(replace(trim(V_SITUACAO),' ',''),'/','') || ', label: lblOption }';
+          ELSE
+            V_CMD_JS_SERIES := V_CMD_JS_SERIES || ',{ name: ''' ||V_SITUACAO||''', type: ''bar'', stack: ''one'', emphasis: emphasisStyle, data: V_DATA_' || replace(replace(trim(V_SITUACAO),' ',''),'/','') || ', label: lblOption }';
+          END IF;
+
+          V_PRIMEIRA_LINHA := 'S';
+        END IF;
+        
+        --PUSH
+        IF V_PRIMEIRA_LINHA = 'S' THEN
+          V_CMD_JS_PUSH := V_CMD_JS_PUSH || TO_CHAR(V_DADOS_VALOR);
+        ELSE
+           V_CMD_JS_PUSH := V_CMD_JS_PUSH || ',' || TO_CHAR(V_DADOS_VALOR);
+        END IF;
+        
+        --XAXIS
+        IF V_CMD_JS_XAXIS NOT LIKE '%'||V_DADOS_MES_REFERENCIA||'%' THEN
+          IF V_CMD_JS_XAXIS = ' ' THEN
+            V_CMD_JS_XAXIS := 'xAxisData.push(''' || TO_CHAR(V_DADOS_MES_REFERENCIA) ||'''';
+          ELSE
+            V_CMD_JS_XAXIS := V_CMD_JS_XAXIS || ',''' || TO_CHAR(V_DADOS_MES_REFERENCIA) ||'''';
+          END IF;
+        END IF;
+
+        V_PRIMEIRA_LINHA := 'N';
+
+      END LOOP; --C_DADOS
+      v_cmd_js_var     := 'var xAxisData = []; ' || v_cmd_js_var || ' var emphasisStyle = { show: false, itemStyle: { barBorderWidth: 1, shadowBlur: 5, shadowOffsetX: 0, shadowOffsetY: 0, shadowColor: ''rgba(0,0,0,0.5)'' } };';
+      v_cmd_js_var     := v_cmd_js_var || ' var lblOption = { show: true,  color:''#000000'',  align: ''center'',  verticalAlign: ''bottom'',  rotate:''00'', fontSize: 11, fontWeight: ''bold'' };';
+      V_CMD_JS_PUSH    := V_CMD_JS_PUSH || ');'; 
+      V_CMD_JS_XAXIS   := V_CMD_JS_XAXIS || ');'; 
+      V_CMD_JS_LEGENDA := V_CMD_JS_LEGENDA || '];';
+      V_CMD_JS_OPTION  := '
+                          option = {
+                          title: {text: '''', textAlign : ''auto''},
+                          color: [''#7dc581'', ''#6a9bd8'', ''#d86a6f'', ''#e1914c'', ''#6600cc'', ''#cc00cc''],
+                          width:''860px'',
+                          height: ''200px'',
+                          legend: {
+                              data: legOption,
+                              left: 20
+                          },
+                          toolbox: {
+                              right: 00,
+                              language: ''en'',
+                              showTitle: true,
+                              feature: {
+                                  dataZoom: { title: { zoom: ''Zoom'', back: ''Volta 1 Passo'' }, yAxisIndex: ''none'' },
+                                  restore: { title: ''Restaura'' },
+                                  dataView: { title: ''Dados'', lang: [''Dados'', ''Fecha'', ''Atualiza''] },
+                                  brush: {
+                                      type: [''rect'',''clear''],
+                                      title: { rect: ''Seleciona'', clear: ''Limpa Seleção'' },
+                                      xAxisIndex: 0
+                                  },
+                                  saveAsImage: { title: ''Save as Image'' },
+                                  magicType: {
+                                      type: [''stack'', ''tiled''],
+                                      title: { stack: ''Empilhado'', tiled: ''Lado a Lado'' }
+                                  }
+                              }
+                          },
+                          tooltip: {},
+                          xAxis: { data: xAxisData, name: '''' },
+                          yAxis: { inverse: false, splitArea: {show: true}, min:-10, max: 110 },
+                          grid: { left: 50 },
+                          series: [';
+      V_CMD_JS_OPTION := V_CMD_JS_OPTION || ' ' || V_CMD_JS_SERIES || ']}; myChart.setOption(option);';
+
+      P_GRAFICO_STR := V_CMD_JS_VAR ||' '|| V_CMD_JS_LEGENDA || ' ' || V_CMD_JS_PUSH || ' ' || V_CMD_JS_XAXIS || ' ' || V_CMD_JS_OPTION;
+      
+    END;
+
+    PROCEDURE SP_SEL_GERENCIAL1_RESUMIDO( 
+      P_MESREFINI CHAR,
+      P_MESREFFIM CHAR,
+      P_OPERADORA CHAR,
+      P_UF        CHAR,
+      P_CSP       CHAR,
+      P_CICLOINI  CHAR,
+      P_CICLOFIM  CHAR,
+      P_SITUACAO  CHAR,
+      P_STATUS    CHAR,
+      P_FILTROS   OUT SYS_REFCURSOR )
+    IS
+      V_QUERY     CLOB;
+      P_TMP       VARCHAR2(100);
+      V_FILTROS   SYS_REFCURSOR;
+    BEGIN
+
+      PKG_DASHBOARD_FISCAL.SP_SEL_GERATAB(P_MESREFINI, P_MESREFFIM, P_OPERADORA, P_UF, P_CSP, P_CICLOINI, P_CICLOFIM, P_SITUACAO, P_STATUS, P_TMP);
+
+      V_QUERY := 'SELECT * FROM (
+                      SELECT CSP, DES_HOLDING AS OPERADORA, UF, MES_REFERENCIA, CICLO, VLR_RESUMO, VLR_TOTAL AS VLR_TCOF, ''VLR_''||DECODE(COD_SIT, 0,''RESUMO'',1,''ACEITO_C_PROT'',2,''ACEITO_S_PROT'',3,''REJEITADO'',4,''RECEBIDO'',5,''PENDENTE'',9,''ACIONAMENTOS'') DES_SIT
+                        FROM '|| P_TMP ||'  T 
+                      ) pivtab
+                      PIVOT (  
+                        SUM(NVL(VLR_TCOF,0))
+                        FOR (DES_SIT) IN ( ''VLR_RECEBIDO'' AS "VLR_RECEBIDO", ''VLR_ACEITO_C_PROT'' AS "VLR_ACEITO_C_PROT", ''VLR_ACEITO_S_PROT'' AS "VLR_ACEITO_S_PROT", ''VLR_REJEITADO'' AS "VLR_REJEITADO", ''VLR_PENDENTE'' AS "VLR_PENDENTE", ''PCT_RECEBIDO'' AS "PCT_RECEBIDO", ''PCT_ACEITO_C_PROT'' AS "PCT_ACEITO_C_PROT", ''PCT_ACEITO_S_PROT'' AS "PCT_ACEITO_S_PROT", ''PCT_REJEITADO'' AS PCT_REJEITADO, ''PCT_PENDENTE'' AS "PCT_PENDENTE" )
+                      ) ORDER BY 1,2,3,4,5';
+
+      DBMS_OUTPUT.PUT_LINE(V_QUERY);
+
+      OPEN V_FILTROS FOR V_QUERY;
+
+      P_FILTROS := V_FILTROS;
+    END;
+
+    PROCEDURE SP_SEL_GERENCIAL1_DETALHADO( 
+      P_MESREFINI CHAR,
+      P_MESREFFIM CHAR,
+      P_OPERADORA CHAR,
+      P_UF        CHAR,
+      P_CSP       CHAR,
+      P_CICLOINI  CHAR,
+      P_CICLOFIM  CHAR,
+      P_SITUACAO  CHAR,
+      P_STATUS    CHAR,
+      P_FILTROS   OUT SYS_REFCURSOR )
+    IS
+      V_FILTROS      SYS_REFCURSOR;
+      V_QUERY        CLOB;
+      P_TMP          VARCHAR2(100);
+    BEGIN
+
+      PKG_DASHBOARD_FISCAL.SP_SEL_GERATAB(P_MESREFINI, P_MESREFFIM, P_OPERADORA, P_UF, P_CSP, P_CICLOINI, P_CICLOFIM, P_SITUACAO, P_STATUS, P_TMP);
+
+      V_QUERY := 'SELECT CSP, DES_HOLDING AS OPERADORA, UF, MES_REFERENCIA, CICLO, DECODE(COD_SIT, 0,''RESUMO'',1,''ACEITO C/ PROT'',2,''ACEITO S/ PROT'',3,''REJEITADO'',4,''RECEBIDO'',5,''PENDENTE'',9,''ACIONAMENTOS'') DES_SIT, DSN_ORIGINAL, 0 AS QTD_ACIONAMENTOS, VLR_RESUMO, VLR_TOTAL AS VLR_TCOF FROM '|| P_TMP ||'  T';
+
+      OPEN V_FILTROS FOR V_QUERY;
+
+      P_FILTROS := V_FILTROS;
+    END;
+
+   PROCEDURE SP_SEL_GERENCIAL2( 
+      P_MESREFINI CHAR,
+      P_MESREFFIM CHAR,
+      P_OPERADORA CHAR,
+      P_UF        CHAR,
+      P_CSP       CHAR,
+      P_CICLOINI  CHAR,
+      P_CICLOFIM  CHAR,
+      P_SITUACAO  CHAR,
+      P_STATUS    CHAR,
+      P_FILTROS   OUT SYS_REFCURSOR )
+    IS
+      V_FILTROS   SYS_REFCURSOR;
+      P_TMP       VARCHAR2(100);
+      V_QUERY     CLOB;
+    BEGIN
+
+      PKG_DASHBOARD_FISCAL.SP_SEL_GERATAB(P_MESREFINI, P_MESREFFIM, P_OPERADORA, P_UF, P_CSP, P_CICLOINI, P_CICLOFIM, P_SITUACAO, P_STATUS, P_TMP);
+
+      V_QUERY := 'SELECT * FROM (
+                      SELECT CSP, DES_HOLDING AS OPERADORA, UF, VLR_RESUMO, VLR_TOTAL AS VLR_TCOF, ''VLR_''||DECODE(COD_SIT, 0,''RESUMO'',1,''ACEITO_C_PROT'',2,''ACEITO_S_PROT'',3,''REJEITADO'',4,''RECEBIDO'',5,''PENDENTE'',9,''ACIONAMENTOS'') DES_SIT
+                        FROM '|| P_TMP ||'  T 
+                      ) pivtab
+                      PIVOT (  
+                        SUM(NVL(VLR_TCOF,0))
+                        FOR (DES_SIT) IN ( ''VLR_RECEBIDO'' AS "VLR_RECEBIDO", ''VLR_ACEITO_C_PROT'' AS "VLR_ACEITO_C_PROT", ''VLR_ACEITO_S_PROT'' AS "VLR_ACEITO_S_PROT", ''VLR_REJEITADO'' AS "VLR_REJEITADO", ''VLR_PENDENTE'' AS "VLR_PENDENTE", ''PCT_RECEBIDO'' AS "PCT_RECEBIDO", ''PCT_ACEITO_C_PROT'' AS "PCT_ACEITO_C_PROT", ''PCT_ACEITO_S_PROT'' AS "PCT_ACEITO_S_PROT", ''PCT_REJEITADO'' AS PCT_REJEITADO, ''PCT_PENDENTE'' AS "PCT_PENDENTE" )
+                      ) ORDER BY 1,2,3,4';
+
+      V_QUERY := 'CREATE GLOBAL TEMPORARY TABLE TEMP2 ON COMMIT PRESERVE ROWS AS
+      SELECT * FROM (
+        SELECT CSP, DES_HOLDING AS OPERADORA, UF, sum(DISTINCT VLR_RESUMO) VLR_RESUMO, sum(VLR_TOTAL) AS VLR_TCOF, DECODE(COD_SIT, 0,''RESUMO'',1,''ACEITO C/ PROT'',2,''ACEITO S/ PROT'',3,''REJEITADO'',4,''RECEBIDO'',5,''PENDENTE'',9,''ACIONAMENTOS'') DES_SIT
+        FROM '|| P_TMP ||' T
+        GROUP BY CSP, DES_HOLDING, UF, cod_sit
+      ) pivtab
+      PIVOT
+             (  SUM(NVL(VLR_TCOF,0))
+                FOR (des_sit) IN ( ''ACEITO C/ PROT'' AS "VLR_ACEITO_C_PROT", ''ACEITO S/ PROT'' AS "VLR_ACEITO_S_PROT", ''REJEITADO'' AS "VLR_REJEITADO", ''RECEBIDO'' AS "VLR_RECEBIDO", ''PENDENTE'' AS "VLR_PENDENTE", ''PCT_RECEBIDO'' AS "PCT_RECEBIDO", ''PCT_ACEITO_C_PROT'' AS "PCT_ACEITO_C_PROT", ''PCT_ACEITO_S_PROT'' AS "PCT_ACEITO_S_PROT", ''PCT_REJEITADO'' AS PCT_REJEITADO, ''PCT_PENDENTE'' AS "PCT_PENDENTE" )
+             )
+      --ORDER BY 1,2,3,4
+      UNION 
+      SELECT * FROM (
+        SELECT CSP, DES_HOLDING AS OPERADORA, '' '' AS UF, 0 VLR_RESUMO, SUM(VLR_TOTAL) AS VLR_TCOF, DECODE(COD_SIT, 0,''RESUMO'',1,''ACEITO C/ PROT'',2,''ACEITO S/ PROT'',3,''REJEITADO'',4,''RECEBIDO'',5,''PENDENTE'',9,''ACIONAMENTOS'') DES_SIT
+        FROM '|| P_TMP ||' T
+        GROUP BY CSP, DES_HOLDING, COD_SIT
+      ) pivtab
+      PIVOT
+             (  SUM(NVL(VLR_TCOF,0))
+                FOR (des_sit) IN ( ''ACEITO C/ PROT'' AS "VLR_ACEITO_C_PROT", ''ACEITO S/ PROT'' AS "VLR_ACEITO_S_PROT", ''REJEITADO'' AS "VLR_REJEITADO", ''RECEBIDO'' AS "VLR_RECEBIDO", ''PENDENTE'' AS "VLR_PENDENTE", ''PCT_RECEBIDO'' AS "PCT_RECEBIDO", ''PCT_ACEITO_C_PROT'' AS "PCT_ACEITO_C_PROT", ''PCT_ACEITO_S_PROT'' AS "PCT_ACEITO_S_PROT", ''PCT_REJEITADO'' AS PCT_REJEITADO, ''PCT_PENDENTE'' AS "PCT_PENDENTE" )
+             )
+      UNION 
+      SELECT * FROM (
+        SELECT CSP, '' '' AS OPERADORA, '' '' AS UF, 0 VLR_RESUMO, SUM(VLR_TOTAL) AS VLR_TCOF, DECODE(COD_SIT, 0,''RESUMO'',1,''ACEITO C/ PROT'',2,''ACEITO S/ PROT'',3,''REJEITADO'',4,''RECEBIDO'',5,''PENDENTE'',9,''ACIONAMENTOS'') DES_SIT
+        FROM '|| P_TMP ||' T
+        GROUP BY CSP, COD_SIT
+      ) pivtab
+      PIVOT
+             (  SUM(NVL(VLR_TCOF,0))
+                FOR (des_sit) IN ( ''ACEITO C/ PROT'' AS "VLR_ACEITO_C_PROT", ''ACEITO S/ PROT'' AS "VLR_ACEITO_S_PROT", ''REJEITADO'' AS "VLR_REJEITADO", ''RECEBIDO'' AS "VLR_RECEBIDO", ''PENDENTE'' AS "VLR_PENDENTE", ''PCT_RECEBIDO'' AS "PCT_RECEBIDO", ''PCT_ACEITO_C_PROT'' AS "PCT_ACEITO_C_PROT", ''PCT_ACEITO_S_PROT'' AS "PCT_ACEITO_S_PROT", ''PCT_REJEITADO'' AS PCT_REJEITADO, ''PCT_PENDENTE'' AS "PCT_PENDENTE" )
+             )
+      ORDER BY 1,2,3,4';
+      DBMS_OUTPUT.PUT_LINE(V_QUERY);
+      EXECUTE IMMEDIATE V_QUERY;
+
+      EXECUTE IMMEDIATE 'UPDATE TEMP2 SET VLR_RESUMO = (SELECT SUM(VLR_RESUMO) FROM TEMP2 TMP WHERE TMP.CSP=TEMP2.CSP AND TMP.OPERADORA=TEMP2.OPERADORA GROUP BY CSP, OPERADORA) WHERE VLR_RESUMO=0 AND UF='' ''';
+      EXECUTE IMMEDIATE 'UPDATE TEMP2 SET VLR_RESUMO = (SELECT SUM(VLR_RESUMO) FROM TEMP2 TMP WHERE TMP.CSP=TEMP2.CSP AND UF='' '' AND OPERADORA <> '' '') WHERE UF='' '' AND OPERADORA='' ''';
+
+      EXECUTE IMMEDIATE 'TRUNCATE TABLE '||P_TMP;
+      EXECUTE IMMEDIATE 'DROP TABLE '||P_TMP;
+
+      EXECUTE IMMEDIATE 'CREATE GLOBAL TEMPORARY TABLE '|| P_TMP ||' ON COMMIT PRESERVE ROWS AS SELECT * FROM TEMP2';
+
+      EXECUTE IMMEDIATE 'TRUNCATE TABLE TEMP2';
+      EXECUTE IMMEDIATE 'DROP TABLE TEMP2';
+
+      --OPEN V_FILTROS FOR V_QUERY;
+      OPEN V_FILTROS FOR 'SELECT * FROM '||P_TMP;
+      P_FILTROS := V_FILTROS;
+
+      --EXECUTE IMMEDIATE 'TRUNCATE TABLE '||P_TMP;
+      --EXECUTE IMMEDIATE 'DROP TABLE '||P_TMP;
+      
+   END;
+
+   PROCEDURE SP_SEL_SELECIONAR_BATIMENTO3(
+      P_MESREFINI CHAR,
+      P_MESREFFIM CHAR,
+      P_OPERADORA CHAR,
+      P_UF        CHAR,
+      P_CSP       CHAR,
+      P_CICLOINI  CHAR,
+      P_CICLOFIM  CHAR,
+      P_SITUACAO  CHAR,
+      P_STATUS    CHAR,
+      P_FILTROS   OUT SYS_REFCURSOR )
+    IS
+      --VARIAVEIS DE TRABALHO
+      V_FILTROS   SYS_REFCURSOR;
+      P_TMP       VARCHAR2(100);
+      V_QUERY     CLOB;
+      COLS        VARCHAR2(1000);
+    BEGIN
+
+      PKG_DASHBOARD_FISCAL.SP_SEL_GERATAB(P_MESREFINI, P_MESREFFIM, P_OPERADORA, P_UF, P_CSP, P_CICLOINI, P_CICLOFIM, P_SITUACAO, P_STATUS, P_TMP);
+
+      SELECT LISTAGG('''' || MES_REFERENCIA || ''' as "' || MES_REFERENCIA || '"', ',') WITHIN GROUP (ORDER BY MES_REFERENCIA) INTO COLS
+        FROM (SELECT DISTINCT MES_REFERENCIA FROM SOLICITACAO_CARGA_PRE_GFX 
+                WHERE mes_referencia BETWEEN P_MESREFINI 
+                      AND P_MESREFFIM ORDER BY 1);
+
+      --,DECODE(COD_SIT, 0,'RESUMO',1,'ACEITO C/ PROT',2,'ACEITO S/ PROT',3,'REJEITADO',4,'RECEBIDO',5,'PENDENTE',9,'ACIONAMENTOS') DES_SIT
+      V_QUERY := '
+SELECT * FROM (  
+SELECT 
+  CASE 
+     WHEN COD_SIT = 0 THEN 0
+     WHEN COD_SIT IN (1,2) THEN 1
+     WHEN COD_SIT IN (3) THEN 2
+     WHEN COD_SIT IN (5) THEN 3
+   END ORDEM
+  ,CASE 
+     WHEN COD_SIT = 0 THEN ''RESUMO''
+     WHEN COD_SIT IN (1,2) THEN ''PROC OK''
+     WHEN COD_SIT IN (3) THEN ''PROC NOK''
+     WHEN COD_SIT IN (5) THEN ''FALTANTE''
+     ELSE TO_CHAR(COD_SIT)
+   END SITUACAO
+   ,MES_REFERENCIA
+  , ROUND((SUM(VLR)/1000),0) VLR
+FROM
+(
+/*PEGANDO VALORES DOS RESUMOS (VALORES DO GEF)*/
+SELECT MES_REFERENCIA, 0 COD_SIT, SUM(VLR_RESUMO) VLR
+  FROM (
+      SELECT DISTINCT /*T.LINHA_GFX,*/ MES_REFERENCIA, VLR_RESUMO FROM '||P_TMP||'  T
+    )
+  GROUP BY MES_REFERENCIA
+/*PEGANDO VALORES DOS FISCAIS COM STATUS (ACEITO C, ACEITO S, REJEITADO)*/
+UNION ALL
+SELECT MES_REFERENCIA, COD_SIT, SUM(T.VLR_TOTAL) VLR
+  FROM '||P_TMP||'  T
+  WHERE COD_SIT IS NOT NULL
+  GROUP BY MES_REFERENCIA, COD_SIT
+/*SOMANDO VALORES DOS FISCAIS COM STATUS => RESUMO - RECEBIDO = PENDENTE*/
+UNION ALL
+SELECT RES.MES_REFERENCIA, 5 COD_SIT, NVL(RES.VLR,0) - NVL(REC.VLR,0) VLR
+  FROM (  
+    SELECT MES_REFERENCIA, 0 COD_SIT, SUM(VLR_RESUMO) VLR
+      FROM (
+        SELECT DISTINCT /*T.LINHA_GFX,*/ MES_REFERENCIA, VLR_RESUMO FROM '||P_TMP||'  T
+      )
+      GROUP BY MES_REFERENCIA
+  ) RES
+  JOIN 
+  (
+  SELECT 
+  MES_REFERENCIA
+  , 4 COD_SIT
+  , SUM(T.VLR_TOTAL) VLR
+  FROM '||P_TMP||'  T
+  WHERE COD_SIT IS NOT NULL
+  GROUP BY 
+  MES_REFERENCIA
+) REC ON 
+  RES.MES_REFERENCIA = REC.MES_REFERENCIA
+)
+GROUP BY
+MES_REFERENCIA,
+  CASE 
+     WHEN COD_SIT = 0 THEN ''RESUMO''
+     WHEN COD_SIT IN (1,2) THEN ''PROC OK''
+     WHEN COD_SIT IN (3) THEN ''PROC NOK''
+     WHEN COD_SIT IN (5) THEN ''FALTANTE''
+     ELSE TO_CHAR(COD_SIT)
+   END 
+  ,CASE
+     WHEN COD_SIT = 0 THEN 0
+     WHEN COD_SIT IN (1,2) THEN 1
+     WHEN COD_SIT IN (3) THEN 2
+     WHEN COD_SIT IN (5) THEN 3
+   END 
+) TABPIV 
+PIVOT
+       (  SUM(NVL(VLR,0))
+          FOR (MES_REFERENCIA) IN ( '|| COLS ||' )
+       )
+ORDER BY 1'
+;
+
+      DBMS_OUTPUT.put_line(V_QUERY);
+      OPEN V_FILTROS FOR V_QUERY;
+
+      P_FILTROS := V_FILTROS;
+    END;
+
+    PROCEDURE SP_SEL_BATIMENTO3_DETATLHADA( 
+      P_CSP       VARCHAR2,
+      P_MESREFI    VARCHAR2,
+      P_MESREFF    VARCHAR2,
+      P_GR_SIT    VARCHAR2,
+      P_TAB_FATO  VARCHAR2,
+      P_FILTROS   OUT SYS_REFCURSOR )
+    IS
+      V_FILTROS      SYS_REFCURSOR;
+      V_QUERY        CLOB;
+      V_QUERY_CSP    VARCHAR2(100);
+      V_QUERY_MESREF VARCHAR2(100);
+      V_QUERY_GR_SIT VARCHAR2(100);
+    BEGIN
+
+      IF RTRIM(LTRIM(NVL(P_CSP,'0'))) = '0' THEN 
+         V_QUERY_CSP := ' OR 1=1)'; 
+      ELSE 
+         V_QUERY_CSP := ')'; 
+      END IF;
+    
+      IF RTRIM(LTRIM(NVL(P_GR_SIT,'0'))) = '0' OR upper(RTRIM(LTRIM(NVL(P_GR_SIT,'0')))) = 'TODAS' THEN 
+        V_QUERY_GR_SIT := ' OR 1=1)'; 
+      ELSE 
+        V_QUERY_GR_SIT := ')'; 
+      END IF;
+
+      V_QUERY := '
+           SELECT DSH.CSP, 
+                  DSH.DES_HOLDING       AS OPERADORA, 
+                  DSH.UF, 
+                  DSH.MES_REFERENCIA, 
+                  DSH.CICLO             AS CICLO_NF, 
+                  RPAD('''',50,'' '')   AS NOME_ARQUIVO, 
+                  DSH.DES_SITUACAO      AS SITUACAO_GRUPO, 
+                  DSH.QTD_ACIONAMENTOS, 
+                  DSH.VLR_RESUMO, 
+                  DSH.VLR_TCOF
+                FROM T_TOT_DASHBOARD_FISCAL DSH
+                WHERE DSH.TAB_TEMP = ''' || P_TAB_FATO || '''' || 
+                     ' AND (DSH.CSP = ''' || P_CSP || '''' || V_QUERY_CSP ||
+                     ' AND DSH.MES_REFERENCIA BETWEEN ''' || P_MESREFI || ''' AND ''' || P_MESREFF || '''' ||
+                     ' AND (UPPER(DSH.DES_GRUPO_SITUACAO) = ''' || UPPER(P_GR_SIT) || '''' || V_QUERY_GR_SIT ||
+                     ' AND DSH.DES_HOLDING IS NOT NULL ' ||
+                     ' AND UPPER(DSH.DES_SITUACAO) <> ''RESUMO'' ';
+
+      V_QUERY := V_QUERY || ' ORDER BY 1';
+             
+      OPEN V_FILTROS FOR V_QUERY;
+
+      P_FILTROS := V_FILTROS;
+   END;
+
+/*---------------------------------------------------*/
+/*---------------------------------------------------*/
+/*---------------------------------------------------*/
+
+
+
+
+
+
+
+
+
+
+/*********************************APAGAR**********************************************************/
+   PROCEDURE SP_SEL_BATIMENTO1_GERATAB(
+      P_MESREFINI CHAR,
+      P_MESREFFIM CHAR,
+      P_OPERADORA CHAR,
+      P_UF CHAR,
+      P_CSP CHAR,
+      P_CICLOINI CHAR,
+      P_CICLOFIM CHAR,
+      P_SITUACAO CHAR,
+      P_STATUS CHAR,
+      P_VISAO CHAR := 'PIVOTAB',
+      P_CAMPO CHAR := 'VALOR',
+      P_TAB_FATO OUT VARCHAR2)
+    IS
+      --VARIAVEIS DE TRABALHO
+      cols        clob; --PEGA AS COLUNAS QUE SERAO GERADAS NO PIVOT (MES_REFERENCIA) 
+      V_ANO       INTEGER;
+      V_MES       INTEGER;
+      V_CSP       CHAR(2) :='';
+      V_MESREFINI CHAR(6);
+      V_MESREFFIM CHAR(6);
+      v_query     clob;
+      v_querytot  CLOB;
+      v_filtro_ciclo VARCHAR2(255) := '';
+      v_filtro_situacao VARCHAR2(255) := '';
+      v_filtro_status VARCHAR2(255) := '';
+      --VARIAVEIS DOS CURSORES
+      C_PIVOT     SYS_REFCURSOR;
+      cnt         NUMBER;
+      V_TAB_DASH VARCHAR2(100);
+    BEGIN
+      
+    SELECT sps_NomeTabTemp('DASHFI') INTO V_TAB_DASH FROM DUAL;
+
+    v_filtro_situacao := '';
+    IF P_SITUACAO <> 'Todas' THEN
+      v_filtro_situacao := ' AND UPPER(DES_GRUPO_SITUACAO) = ''' || UPPER(P_SITUACAO) || '''';
+    END IF;
+
+    v_filtro_status := '';
+    IF P_STATUS <> 'Todos' THEN
+      IF P_STATUS = 'OK' THEN
+        v_filtro_status :=  ' AND (NVL(vlr_resumo,0) <> NVL(vlr_tcof,0)) ';
+      ELSE
+        v_filtro_status :=  ' AND (NVL(vlr_resumo,0) = NVL(vlr_tcof,0)) ';
+      END IF;
+    END IF;
+
+    v_filtro_ciclo := '';
+    IF LENGTH(rtrim(ltrim(nvl(P_CICLOINI,'')))) > 0 THEN
+      v_filtro_ciclo := ' AND CICLO BETWEEN  ' || P_CICLOINI || ' AND ' || P_CICLOFIM;
+    END IF;
+
+    SELECT COUNT(1) INTO cnt FROM user_tables WHERE table_name = 'tmp_pivot';
+    IF cnt <> 0 THEN
+      EXECUTE IMMEDIATE 'TRUNCATE TABLE tmp_pivot';
+      EXECUTE IMMEDIATE 'DROP TABLE tmp_pivot';
+    END IF;
+
+    SELECT LISTAGG('''' || MES_REFERENCIA || ''' as "' || MES_REFERENCIA || '"', ',') WITHIN GROUP (ORDER BY MES_REFERENCIA) INTO   COLS
+           FROM (SELECT DISTINCT MES_REFERENCIA FROM SOLICITACAO_CARGA_PRE_GFX WHERE mes_referencia BETWEEN P_MESREFINI AND P_MESREFFIM ORDER BY 1);
+
+-- VOLTAR APÓS TESTES
+-- VOLTAR APÓS TESTES
+-- VOLTAR APÓS TESTES
+-- VOLTAR APÓS TESTES
+--    --APAGA FATOS ANTERIORES (15 MINUTOS PARA TRAZ)
+    DELETE FROM T_TOT_DASHBOARD_FISCAL WHERE dat_inclusao < (SYSDATE-15/24/60) OR TAB_TEMP=V_TAB_DASH;
+--    DELETE FROM T_TOT_DASHBOARD_FISCAL WHERE tab_temp <> 'TMP_DASHFI_14697_29_191620';
+-- VOLTAR APÓS TESTES
+-- VOLTAR APÓS TESTES
+-- VOLTAR APÓS TESTES
+-- VOLTAR APÓS TESTES
+    
+    v_query := 'SELECT ''' || V_TAB_DASH ||''' TAB_TEMP, ''%%'' as CSP,
+       AF.SEQ_RECEPCAO,
+       AF.DSN_RECEPCAO,
+       GFX.COD_HOLDING, 
+       GFX.DES_HOLDING,
+       GFX.UF,
+       GFX.MES_REFERENCIA,
+       CASE
+         WHEN AF.DSN_RECEPCAO IS NULL     THEN ''Pendente''
+         WHEN AF.COD_CRITICA2 <> 0        THEN ''Rejeitado''
+         WHEN AF.STATUS_CRITPROT = ''FJ'' THEN ''Rejeitado''
+         WHEN AF.STATUS_CRITPROT IS NULL  THEN ''Recebido''
+         WHEN AF.STATUS_CRITPROT = ''FR'' THEN ''Aceito''
+         ELSE ''OUTROS''
+       END AS DES_GRUPO_SITUACAO,
+       CASE
+         WHEN AF.DSN_RECEPCAO IS NULL     THEN 1
+         WHEN AF.COD_CRITICA2 <> 0        THEN 2
+         WHEN AF.STATUS_CRITPROT IS NULL  THEN 3
+         WHEN AF.STATUS_CRITPROT = ''FR''   THEN 4
+         WHEN AF.STATUS_CRITPROT = ''FJ''   THEN 5
+         ELSE 9
+       END AS COD_SITUACAO,
+       CASE
+         WHEN AF.DSN_RECEPCAO IS NULL     THEN ''TCOF Não Encontrado''
+         WHEN AF.COD_CRITICA2 <> 0        THEN ''TCOF Criticado''
+         WHEN AF.STATUS_CRITPROT = ''FJ'' THEN ''Mainframe Rejeitado''
+         WHEN AF.STATUS_CRITPROT IS NULL  THEN ''Aguardando Protocolo''
+         WHEN AF.STATUS_CRITPROT = ''FR'' THEN ''TCOF Recebido''
+         ELSE ''OUTROS''
+       END AS DES_SITUACAO,
+       SUM(VLR_TOTAL_ARQ) VLR_TCOF,
+       SUM(NVL(GFX.VLR_RESUMO,0)) VLR_RESUMO,
+       (SELECT COUNT(1) FROM T_EMAIL_CONTROLEENVIO%%% E  WHERE AF.SEQ_RECEPCAO = E.ID_SEQ_RECEPCAO) + 
+       (SELECT COUNT(1) FROM T_EMAIL_CONTROLEENVIO_HIST%%% HE WHERE AF.SEQ_RECEPCAO = HE.ID_SEQ_RECEPCAO) QTD_ACIONAMENTOS,
+       SYSDATE AS DAT_INCLUSAO,
+       GFX.CICLO
+    FROM (SELECT SOL.COD_HOLDING, HC.DES_HOLDING, SOL.MES_REFERENCIA, DET.UF, DET.CICLO, SUM(VALOR_CONTABIL) VLR_RESUMO
+       FROM SOLICITACAO_CARGA_PRE_GFX%%% SOL
+         INNER JOIN T_SIGLA_HOLDING%%% HC ON HC.SIGLA_HOLDING = SOL.COD_HOLDING
+         INNER JOIN RESUMO_FISCAL_GFX%%% DET ON SOL.ID_CARGA = DET.ID_CARGA AND SOL.TIPO_DEMONSTRATIVO = ''RESU''
+         WHERE SOL.MES_REFERENCIA BETWEEN ''' || P_MESREFINI || ''' AND ''' || P_MESREFFIM || ''' ' || P_OPERADORA || ' ' || P_UF || v_filtro_ciclo ||
+         ' GROUP BY SOL.COD_HOLDING, HC.DES_HOLDING, SOL.MES_REFERENCIA, DET.UF, DET.CICLO) GFX
+    LEFT JOIN (SELECT * FROM T_CTRL_ARQ_FISCAIS%%% AF2
+              INNER JOIN T_EMPRESA EMPCB ON EMPCB.COD_EOTEMP = AF2.COD_EOT_CB
+              WHERE AF2.STATUS_RECEPCAO <> 5
+                    AND AF2.COD_CRITICA = 0
+                    AND TO_CHAR(AF2.DAT_EMISSAONF, ''YYYYMM'') BETWEEN '''||P_MESREFINI||''' AND '''||P_MESREFFIM||''' 
+                    AND NVL(AF2.STATUS_CARGA, 0) = 0 
+                    AND NVL(AF2.QTD_NOTA, 0) > 0 ' || v_filtro_situacao || ' ' || REPLACE(P_UF,'UF','COD_UFEMP') || ' ' || P_OPERADORA || ' ' || REPLACE(v_filtro_ciclo,'CICLO', 'CICLO_NF') ||'
+                    /*
+                    AND AF2.SEQ_RECEPCAO IN
+                           (SELECT MAX(MAF.SEQ_RECEPCAO) SEQ_RECEPCAO
+                              FROM T_CTRL_ARQ_FISCAIS%%% MAF
+                              INNER JOIN T_EMPRESA MEMPCB ON MEMPCB.COD_EOTEMP = MAF.COD_EOT_CB AND MEMPCB.COD_UFEMP = EMPCB.COD_UFEMP
+                           WHERE MAF.COD_CONTRATADA = AF2.COD_CONTRATADA
+                                    AND MAF.DAT_EMISSAONF = AF2.DAT_EMISSAONF
+                                    AND MAF.CICLO_NF = AF2.CICLO_NF
+                                    AND MAF.STATUS_RECEPCAO <> 5)
+                    */
+                                    ) AF 
+         ON AF.COD_CONTRATADA = GFX.COD_HOLDING
+            AND TO_CHAR(AF.DAT_EMISSAONF, ''YYYYMM'') = GFX.MES_REFERENCIA
+            AND AF.CICLO_NF = GFX.CICLO
+            AND AF.COD_UFEMP = GFX.UF
+    GROUP BY 
+       AF.SEQ_RECEPCAO,
+       AF.DSN_RECEPCAO,
+       GFX.COD_HOLDING, 
+       GFX.DES_HOLDING,
+       GFX.UF,
+       GFX.MES_REFERENCIA,
+       CASE
+         WHEN AF.DSN_RECEPCAO IS NULL     THEN ''Pendente''
+         WHEN AF.COD_CRITICA2 <> 0        THEN ''Rejeitado''
+         WHEN AF.STATUS_CRITPROT = ''FJ'' THEN ''Rejeitado''
+         WHEN AF.STATUS_CRITPROT IS NULL  THEN ''Recebido''
+         WHEN AF.STATUS_CRITPROT = ''FR'' THEN ''Aceito''
+         ELSE ''OUTROS''
+       END,
+       CASE
+         WHEN AF.DSN_RECEPCAO IS NULL     THEN 1
+         WHEN AF.COD_CRITICA2 <> 0        THEN 2
+         WHEN AF.STATUS_CRITPROT IS NULL  THEN 3
+         WHEN AF.STATUS_CRITPROT = ''FR''   THEN 4
+         WHEN AF.STATUS_CRITPROT = ''FJ''   THEN 5
+         ELSE 9
+       END,
+       CASE
+         WHEN AF.DSN_RECEPCAO IS NULL     THEN ''TCOF Não Encontrado''
+         WHEN AF.COD_CRITICA2 <> 0        THEN ''TCOF Criticado''
+         WHEN AF.STATUS_CRITPROT = ''FJ'' THEN ''Mainframe Rejeitado''
+         WHEN AF.STATUS_CRITPROT IS NULL  THEN ''Aguardando Protocolo''
+         WHEN AF.STATUS_CRITPROT = ''FR'' THEN ''TCOF Recebido''
+         ELSE ''OUTROS''
+       END,
+       GFX.CICLO
+union
+SELECT ''' || V_TAB_DASH ||''' TAB_TEMP, ''%%'' as CSP,
+       0 AS SEQ_RECEPCAO,
+       '''' AS DSN_RECEPCAO,
+       GFX.COD_HOLDING, 
+       GFX.DES_HOLDING,
+       GFX.UF,
+       GFX.MES_REFERENCIA,
+       ''Resumo'' AS DES_GRUPO_SITUACAO,
+       0 AS COD_SITUACAO,
+       ''Resumo'' AS DES_SITUACAO,
+       0 VLR_TCOF,
+       SUM(NVL(GFX.VLR_RESUMO,0)) VLR_RESUMO,
+       0 QTD_ACIONAMENTOS,
+       SYSDATE AS DAT_INCLUSAO,
+       GFX.CICLO
+    FROM (SELECT SOL.COD_HOLDING, HC.DES_HOLDING, SOL.MES_REFERENCIA, DET.UF, DET.CICLO, SUM(VALOR_CONTABIL) VLR_RESUMO
+       FROM SOLICITACAO_CARGA_PRE_GFX%%% SOL
+         INNER JOIN T_SIGLA_HOLDING%%% HC ON HC.SIGLA_HOLDING = SOL.COD_HOLDING
+         INNER JOIN RESUMO_FISCAL_GFX%%% DET ON SOL.ID_CARGA = DET.ID_CARGA AND SOL.TIPO_DEMONSTRATIVO = ''RESU''
+         WHERE SOL.MES_REFERENCIA BETWEEN ''' || P_MESREFINI || ''' AND ''' || P_MESREFFIM || ''' ' || P_OPERADORA || ' ' || P_UF || v_filtro_ciclo ||
+         'GROUP BY SOL.COD_HOLDING, HC.DES_HOLDING, SOL.MES_REFERENCIA, DET.UF, DET.CICLO) GFX
+    GROUP BY 
+       GFX.COD_HOLDING, 
+       GFX.DES_HOLDING,
+       GFX.UF,
+       GFX.MES_REFERENCIA,
+       GFX.CICLO';
+
+    V_CSP := P_CSP;
+    IF P_CSP = '31' THEN v_querytot := replace(replace(v_query,'%%%',''),'%%','31'); END IF;
+    IF P_CSP = '14' THEN v_querytot := replace(replace(v_query,'%%%','_BRT'),'%%','14'); END IF;
+    IF P_CSP = '0' THEN v_querytot := replace(replace(v_query,'%%%','_BRT'),'%%','14') || ' union ' || replace(replace(v_query,'%%%',''),'%%','31'); V_CSP := '14';END IF;
+
+    dbms_output.put_line( 'INSERT INTO T_TOT_DASHBOARD_FISCAL ' || v_querytot );
+    EXECUTE IMMEDIATE 'INSERT INTO T_TOT_DASHBOARD_FISCAL ' || v_querytot;
+
+    --DEIXA SOMENTE O ULTIMO REGISTRO VALIDO DE CADA TCOF
+    v_query := 'DELETE FROM T_TOT_DASHBOARD_FISCAL TMP WHERE TAB_TEMP=''' || V_TAB_DASH || ''' AND DES_GRUPO_SITUACAO <> ''Resumo'' AND CSP=''14'' AND SEQ_RECEPCAO NOT IN 
+                           (SELECT MAX(MAF.SEQ_RECEPCAO) SEQ_RECEPCAO
+                              FROM T_CTRL_ARQ_FISCAIS_BRT MAF
+                              INNER JOIN T_EMPRESA MEMPCB ON MEMPCB.COD_EOTEMP = MAF.COD_EOT_CB 
+                           WHERE MAF.COD_CONTRATADA = tmp.COD_HOLDING
+                                    AND TO_CHAR(MAF.DAT_EMISSAONF, ''YYYYMM'') = tmp.MES_REFERENCIA
+                                    AND MAF.CICLO_NF = tmp.CICLO
+                                    AND MAF.STATUS_RECEPCAO <> 5
+                                    AND MEMPCB.COD_UFEMP = tmp.UF
+                                    AND MAF.COD_CRITICA = 0
+                                    AND NVL(MAF.STATUS_CARGA, 0) = 0 
+                                    AND NVL(MAF.QTD_NOTA, 0) > 0 
+                                    )';
+
+    EXECUTE IMMEDIATE v_query;
+
+    v_query := 'DELETE FROM T_TOT_DASHBOARD_FISCAL TMP WHERE TAB_TEMP=''' || V_TAB_DASH || ''' AND DES_GRUPO_SITUACAO <> ''Resumo'' AND CSP=''31'' AND SEQ_RECEPCAO NOT IN 
+                           (SELECT MAX(MAF.SEQ_RECEPCAO) SEQ_RECEPCAO
+                              FROM T_CTRL_ARQ_FISCAIS MAF
+                              INNER JOIN T_EMPRESA MEMPCB ON MEMPCB.COD_EOTEMP = MAF.COD_EOT_CB 
+                           WHERE MAF.COD_CONTRATADA = tmp.COD_HOLDING
+                                    AND TO_CHAR(MAF.DAT_EMISSAONF, ''YYYYMM'') = tmp.MES_REFERENCIA
+                                    AND MAF.CICLO_NF = tmp.CICLO
+                                    AND MAF.STATUS_RECEPCAO <> 5
+                                    AND MEMPCB.COD_UFEMP = tmp.UF
+                                    AND MAF.COD_CRITICA = 0
+                                    AND NVL(MAF.STATUS_CARGA, 0) = 0 
+                                    AND NVL(MAF.QTD_NOTA, 0) > 0 
+                                    )';
+
+    EXECUTE IMMEDIATE v_query;
+
+
+    --INSERINDO GRUPOS DE SITUACAO QUE NAO EXISTEM NA TABELA FATO (MES_REF A MES_REF E CSP A CSP)
+    SELECT min(mes_referencia), MAX(MES_REFERENCIA) INTO V_MESREFINI, V_MESREFFIM FROM T_TOT_DASHBOARD_FISCAL WHERE TAB_TEMP = V_TAB_DASH;
+    V_MES := TO_NUMBER(SUBSTR(V_MESREFINI,5,2));
+    V_ANO := TO_NUMBER(SUBSTR(V_MESREFINI,1,4));
+    
+    WHILE to_number(trim(TO_CHAR(V_ANO,'0000')) || trim(TO_CHAR(V_MES,'00'))) <= to_number(V_MESREFFIM)
+    LOOP
+
+      INSERT INTO T_TOT_DASHBOARD_FISCAL (TAB_TEMP, CSP, mes_referencia, COD_SITUACAO, DES_GRUPO_SITUACAO, vlr_TCOF, VLR_RESUMO, QTD_ACIONAMENTOS, DAT_INCLUSAO) 
+             SELECT V_TAB_DASH, V_CSP, trim(TO_CHAR(V_ANO))||trim(TO_CHAR(V_MES,'00')), TGR.COD_SITUACAO, tgr.DES_GRUPO_SITUACAO, 0, 0, 0, SYSDATE 
+                FROM sch_dw_oi.t_grupo_situacao tgr WHERE NOT EXISTS (SELECT 1 FROM T_TOT_DASHBOARD_FISCAL fato 
+                                                                             WHERE TAB_TEMP = V_TAB_DASH AND fato.csp= V_CSP AND fato.mes_referencia = trim(TO_CHAR(V_ANO))||trim(TO_CHAR(V_MES,'00')) AND fato.des_grupo_situacao=tgr.des_grupo_situacao);
+      COMMIT;
+
+      V_MES := V_MES + 1;
+      IF V_MES > 12 THEN
+        V_MES := 1;
+        V_ANO := V_ANO + 1;
+      END IF;
+
+      IF TO_NUMBER(trim(TO_CHAR(V_ANO))||trim(TO_CHAR(V_MES,'00'))) > to_number(V_MESREFFIM) THEN
+        IF P_CSP = V_CSP OR V_CSP = '31' THEN 
+          EXIT; 
+        ELSE
+          V_CSP := '31';
+          V_MES := TO_NUMBER(SUBSTR(V_MESREFINI,5,2));
+          V_ANO := TO_NUMBER(SUBSTR(V_MESREFINI,1,4));
+        END IF;
+      END IF;
+
+    END LOOP;
+
+    P_TAB_FATO := TRIM(V_TAB_DASH);
+
+   END;
+
+    PROCEDURE SP_SEL_LISTA_EMAIL_OPERADORA( 
+      P_OPERADORA   VARCHAR2,
+      P_FILTROS OUT SYS_REFCURSOR )
+    IS
+      V_FILTROS SYS_REFCURSOR;
+    BEGIN
+      OPEN V_FILTROS FOR
+           'SELECT TRIM(LISTA_EMAIL) LISTA_EMAIL FROM SCH_C14DB00.T_EMAIL WHERE UPPER(DESCRICAO_GRUPO) = '''|| TRIM(P_OPERADORA) ||'_FISCAL_SPED_DMD_21595_ERRO''';
+            --SELECT TRIM(LISTA_EMAIL) LISTA_EMAIL FROM SCH_C14DB00.T_EMAIL WHERE UPPER(DESCRICAO_GRUPO) = 'TLA_FISCAL_SPED_DMD_21595_ERRO';
+
+      P_FILTROS := V_FILTROS;
+    END;
+
+
+END PKG_DASHBOARD_FISCAL;
+
+--select * from SYS.USER_ERRORS where NAME = 'PKG_DASHBOARD_FISCAL' --and type = 'PROCEDURE'
+--TRUNCATE TABLE tmp_pivot;
+--DROP TABLE tmp_pivot;
+
+
